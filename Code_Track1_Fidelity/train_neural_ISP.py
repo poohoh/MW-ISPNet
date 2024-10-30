@@ -17,6 +17,7 @@ import torchvision.transforms as T
 import matplotlib.pyplot as plt
 from torchsummary import summary
 from torch.utils.tensorboard import SummaryWriter
+from accelerate import Accelerator
 
 dataset_path = '../dataset/'
 save_model_path = '../checkpoints/'
@@ -79,7 +80,9 @@ class TrainDataset(Dataset):
 
 
 def train():
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # accelerator
+    accelerator = Accelerator(split_batches=True)
+    device = accelerator.device
 
     # network
     generator = MWRCAN().to(device)
@@ -100,8 +103,13 @@ def train():
     # load data
     dataset_train = TrainDataset(data_dir=dataset_path, test=False, transform=transform)
     dataset_test = TrainDataset(data_dir=dataset_path, test=True, transform=transform)
-    train_loader = DataLoader(dataset_train, batch_size=1, shuffle=True, num_workers=1)
-    test_loader = DataLoader(dataset_test, batch_size=1, shuffle=False, num_workers=1)
+    train_loader = DataLoader(dataset_train, batch_size=3, shuffle=True, num_workers=1)
+    test_loader = DataLoader(dataset_test, batch_size=3, shuffle=False, num_workers=1)
+
+    # accelerator
+    generator, optimizer, scheduler = accelerator.prepare(generator, optimizer, scheduler)
+    train_loader, test_loader = accelerator.prepare(train_loader, test_loader)
+    
 
     # raw_train, png_train = dataset_train[0]
     # print(f'{raw_train.shape}')
@@ -135,9 +143,11 @@ def train():
             writer.add_scalar(f'train/l1_loss', loss_l1, epoch * len(train_loader) + idx)
             writer.add_scalar(f'train/total_loss', total_loss, epoch * len(train_loader) + idx)
 
-            total_loss.backward()
+            accelerator.backward(total_loss)
+            # total_loss.backward()
             optimizer.step()
 
+        accelerator.wait_for_everyone()
         if (epoch + 1) % 10 == 0:
             # Save the model that corresponds to the current epoch
             generator.eval().cpu()
